@@ -185,9 +185,16 @@ function showError(message) {
   }, 3000);
 }
 
-function addApartmentToList(details) {
+async function addApartmentToList(details) {
+  const apartmentsList = document.getElementById('apartmentsList');
+  if (!apartmentsList) {
+    console.error("apartmentsList element not found");
+    return;
+  }
+
   const li = document.createElement('li');
   li.className = 'apartment-item';
+  li.style.marginBottom = '10px';
 
   let photoHtml = '';
   let photoUrl = '';
@@ -212,13 +219,22 @@ function addApartmentToList(details) {
     const saveBtn = document.createElement('button');
     saveBtn.innerText = 'Save';
     saveBtn.style.marginTop = '5px';
+    saveBtn.style.padding = '5px 10px';
+    saveBtn.style.cursor = 'pointer';
+    saveBtn.style.background = '#28a745';
+    saveBtn.style.color = '#fff';
+    saveBtn.style.border = 'none';
+    saveBtn.style.borderRadius = '3px';
+    saveBtn.style.transition = 'background 0.3s ease';
+    saveBtn.onmouseover = () => { saveBtn.style.background = '#218838'; };
+    saveBtn.onmouseout = () => { saveBtn.style.background = '#28a745'; };
     saveBtn.addEventListener('click', () => {
       saveApartmentToSupabase({
         place_id: details.place_id,
         name: details.name,
         vicinity: details.vicinity,
         website: details.website || '',
-        photo: photoUrl,
+        photo_url: photoUrl,
         rating: 0
       });
     });
@@ -234,6 +250,7 @@ function addApartmentToList(details) {
 }
 
 function clearApartmentsList() {
+  const apartmentsList = document.getElementById('apartmentsList');
   if (apartmentsList) {
     apartmentsList.innerHTML = '';
   }
@@ -244,4 +261,210 @@ function clearMarkers() {
     marker.setMap(null);
   }
   markers = [];
+}
+
+// Save Apartment to Supabase
+async function saveApartmentToSupabase(apartment) {
+  if (!window.currentUser) {
+    showError("You must be logged in to save apartments.");
+    return;
+  }
+
+  try {
+    const { error } = await supabase
+      .from('saved_apartments')
+      .upsert({
+        user_id: window.currentUser.id,
+        place_id: apartment.place_id,
+        name: apartment.name,
+        vicinity: apartment.vicinity,
+        website: apartment.website,
+        photo_url: apartment.photo_url,
+        rating: apartment.rating
+      }, { onConflict: 'user_id,place_id' });
+
+    if (error) {
+      console.error("Error saving apartment:", error);
+      showError("Error saving apartment: " + error.message);
+    } else {
+      showError("Apartment saved successfully!");
+    }
+  } catch (err) {
+    console.error("Unexpected error:", err);
+    showError("An unexpected error occurred while saving the apartment.");
+  }
+}
+
+// Fetch and Display Saved Apartments
+async function displaySavedApartments() {
+  const savedList = document.getElementById('savedApartmentsList');
+  if (!savedList) {
+    console.error("savedApartmentsList element not found");
+    return;
+  }
+
+  savedList.innerHTML = '';
+
+  if (!window.currentUser) {
+    savedList.innerHTML = '<p>Please log in to see your saved apartments.</p>';
+    return;
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from('saved_apartments')
+      .select('*')
+      .eq('user_id', window.currentUser.id);
+
+    if (error) {
+      console.error("Error fetching saved apartments:", error);
+      showError("Error fetching saved apartments: " + error.message);
+      return;
+    }
+
+    if (data.length === 0) {
+      savedList.innerHTML = '<p>No saved apartments yet.</p>';
+      return;
+    }
+
+    data.forEach(apartment => {
+      const li = document.createElement('li');
+      li.className = 'saved-apartment-item';
+
+      let photoHtml = '';
+      if (apartment.photo_url) {
+        photoHtml = `<img src="${apartment.photo_url}" alt="${apartment.name}" />`;
+      }
+
+      let websiteHtml = '';
+      if (apartment.website) {
+        websiteHtml = `<a href="${apartment.website}" target="_blank">Visit Website</a><br>`;
+      }
+
+      li.innerHTML = `
+        <strong>${apartment.name}</strong><br>
+        ${apartment.vicinity || 'Address not available'}<br>
+        ${photoHtml}
+        ${websiteHtml}
+      `;
+
+      // Rating Section
+      const ratingContainer = document.createElement('div');
+      ratingContainer.style.margin = '10px 0';
+      ratingContainer.style.display = 'flex';
+      ratingContainer.style.alignItems = 'center';
+
+      const ratingLabel = document.createElement('span');
+      ratingLabel.textContent = 'Rating: ';
+      ratingContainer.appendChild(ratingLabel);
+
+      for (let i = 1; i <= 5; i++) {
+        const star = document.createElement('span');
+        star.innerText = '★';
+        star.style.cursor = 'pointer';
+        star.style.fontSize = '20px';
+        star.style.marginRight = '5px';
+        star.style.color = i <= (apartment.rating || 0) ? 'gold' : '#ccc';
+
+        star.addEventListener('mouseover', () => {
+          highlightStars(ratingContainer, i);
+        });
+
+        star.addEventListener('mouseout', () => {
+          highlightStars(ratingContainer, apartment.rating || 0);
+        });
+
+        star.addEventListener('click', () => {
+          updateApartmentRatingInSupabase(apartment.place_id, i);
+          apartment.rating = i;
+          highlightStars(ratingContainer, i);
+        });
+
+        ratingContainer.appendChild(star);
+      }
+
+      li.appendChild(ratingContainer);
+
+      // Unsave Button
+      const unsaveBtn = document.createElement('button');
+      unsaveBtn.innerText = 'Unsave';
+      unsaveBtn.style.padding = '5px 10px';
+      unsaveBtn.style.cursor = 'pointer';
+      unsaveBtn.style.background = '#dc3545';
+      unsaveBtn.style.color = '#fff';
+      unsaveBtn.style.border = 'none';
+      unsaveBtn.style.borderRadius = '3px';
+      unsaveBtn.style.transition = 'background 0.3s ease';
+      unsaveBtn.onmouseover = () => { unsaveBtn.style.background = '#c82333'; };
+      unsaveBtn.onmouseout = () => { unsaveBtn.style.background = '#dc3545'; };
+      unsaveBtn.addEventListener('click', () => unsaveApartmentFromSupabase(apartment.place_id));
+      li.appendChild(unsaveBtn);
+
+      savedList.appendChild(li);
+    });
+  } catch (err) {
+    console.error("Unexpected error:", err);
+    showError("An unexpected error occurred while fetching saved apartments.");
+  }
+}
+
+// Update Apartment Rating in Supabase
+async function updateApartmentRatingInSupabase(place_id, rating) {
+  if (!window.currentUser) {
+    showError("You must be logged in to rate apartments.");
+    return;
+  }
+
+  try {
+    const { error } = await supabase
+      .from('saved_apartments')
+      .update({ rating })
+      .eq('user_id', window.currentUser.id)
+      .eq('place_id', place_id);
+
+    if (error) {
+      console.error("Error updating rating:", error);
+      showError("Error updating rating: " + error.message);
+    } else {
+      showError("Rating updated successfully!");
+    }
+  } catch (err) {
+    console.error("Unexpected error:", err);
+    showError("An unexpected error occurred while updating the rating.");
+  }
+}
+
+// Unsave Apartment from Supabase
+async function unsaveApartmentFromSupabase(place_id) {
+  if (!window.currentUser) {
+    showError("You must be logged in to remove saved apartments.");
+    return;
+  }
+
+  try {
+    const { error } = await supabase
+      .from('saved_apartments')
+      .delete()
+      .eq('user_id', window.currentUser.id)
+      .eq('place_id', place_id);
+
+    if (error) {
+      console.error("Error removing apartment:", error);
+      showError("Error removing apartment: " + error.message);
+    } else {
+      showError("Apartment removed successfully!");
+      displaySavedApartments();
+    }
+  } catch (err) {
+    console.error("Unexpected error:", err);
+    showError("An unexpected error occurred while removing the apartment.");
+  }
+}
+
+// Highlight Stars Based on Rating
+function highlightStars(container, rating) {
+  const stars = container.querySelectorAll('span');
+  stars.forEach((star, index) => {
+    star.style.color = index < rating ? 'gold' : '#ccc';
+  });
 }
