@@ -84,6 +84,7 @@ window.searchCity = function() {
   }
 };
 
+// Initialize Autocomplete after Map is loaded
 window.initMap = (function(originalInitMap) {
   return function() {
     if (typeof originalInitMap === 'function') {
