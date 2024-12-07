@@ -34,6 +34,7 @@ window.loginUser = async () => {
     alert("Login error: " + error.message);
   } else {
     alert("Login successful!");
+    // Optionally, redirect or perform other actions upon successful login
   }
 };
 
@@ -44,6 +45,7 @@ window.logoutUser = async () => {
     alert("Logout error: " + error.message);
   } else {
     alert("Logged out successfully");
+    // Optionally, redirect or perform other actions upon successful logout
   }
 };
 
