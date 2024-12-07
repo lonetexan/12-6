@@ -14,14 +14,8 @@ function showTab(tabId) {
     const linkItem = document.querySelector(`nav ul li a[href="#${tabId}"]`)?.parentElement;
     if (linkItem) linkItem.classList.add('active');
 
-    // "Refresh" data when switching tabs:
     if (tabId === 'saved') {
       displaySavedApartments();
-    } else if (tabId === 'maps') {
-      // If map is ready, re-run initial search to refresh apartment listings
-      if (window.map && window.map.getCenter) {
-        initialSearch(window.map.getCenter());
-      }
     }
   }
 }
@@ -30,34 +24,71 @@ window.showTab = showTab;
 
 function initHomeAutocomplete() {
   const homeInput = document.getElementById('homeCityInput');
-  const homeAutocomplete = new google.maps.places.Autocomplete(homeInput, {});
+
+  if (!homeInput) {
+    console.error("homeCityInput not found");
+    return;
+  }
+
+  console.log("Initializing home autocomplete...");
+  const homeAutocomplete = new google.maps.places.Autocomplete(homeInput, {
+    types: ['(cities)'],
+    fields: ['geometry', 'name', 'formatted_address']
+    // If you want to restrict to a certain country, uncomment below:
+    // componentRestrictions: { country: 'us' }
+  });
 
   homeAutocomplete.addListener('place_changed', () => {
     const place = homeAutocomplete.getPlace();
-    if (!place.geometry || !place.geometry.location) return;
-    // Store the location for later use in searchCity
+    console.log("Place changed on home input:", place);
+    if (!place.geometry || !place.geometry.location) {
+      sessionStorage.removeItem('initialCenterLat');
+      sessionStorage.removeItem('initialCenterLng');
+      alert("Please select a city from the autocomplete suggestions.");
+      return;
+    }
+
+    // Store selected city coordinates
     sessionStorage.setItem('initialCenterLat', place.geometry.location.lat());
     sessionStorage.setItem('initialCenterLng', place.geometry.location.lng());
+
+    // Automatically navigate to maps tab
+    console.log("City selected. Navigating to maps tab...");
+    showTab('maps');
+
+    // Recenter the map
+    if (typeof recenterMap === 'function') {
+      recenterMap(place.geometry.location.lat(), place.geometry.location.lng());
+    } else {
+      console.error("recenterMap function not defined in map.js");
+    }
   });
 }
 
-window.searchCity = async function() {
+window.searchCity = function() {
   const lat = sessionStorage.getItem('initialCenterLat');
   const lng = sessionStorage.getItem('initialCenterLng');
 
   if (!lat || !lng) {
-    alert("Please select a location from the suggestions first.");
+    alert("Please select a city from the suggestions before searching.");
     return;
   }
 
-  // Go to maps tab
   showTab('maps');
+
+  // Recenter the map
+  if (typeof recenterMap === 'function') {
+    recenterMap(parseFloat(lat), parseFloat(lng));
+  } else {
+    console.error("recenterMap function not defined in map.js");
+  }
 };
 
-// Wrap the original initMap so we can run initHomeAutocomplete after the map initializes
 window.initMap = (function(originalInitMap) {
   return function() {
-    originalInitMap();
+    if (typeof originalInitMap === 'function') {
+      originalInitMap();
+    }
     initHomeAutocomplete();
   };
 })(window.initMap || function() {});
