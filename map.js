@@ -5,9 +5,15 @@ let placesService;
 let markers = [];
 let infoWindow;
 let apartmentsList;
+let pagination = null;
+let lastSearchCenter = null;
+let lastZoomLevel = null;
+
+const radiusInMeters = 16000; // about 10 miles
 
 window.initMap = function() {
-  let initialLat = parseFloat(sessionStorage.getItem('initialCenterLat')) || 30.2672;
+  console.log("Initializing map...");
+  let initialLat = parseFloat(sessionStorage.getItem('initialCenterLat')) || 30.2672; // Default to Austin, TX
   let initialLng = parseFloat(sessionStorage.getItem('initialCenterLng')) || -97.7431;
 
   map = new google.maps.Map(document.getElementById("map"), {
@@ -30,66 +36,94 @@ window.initMap = function() {
 
   autocomplete.addListener('place_changed', () => {
     const place = autocomplete.getPlace();
+    console.log("Map search place changed:", place);
     if (!place.geometry || !place.geometry.location) return;
     map.setCenter(place.geometry.location);
     map.setZoom(13);
-    runTextSearch();
+    maybeSearch();
   });
 
   map.addListener('idle', () => {
-    runTextSearch();
+    maybeSearch();
   });
 
-  runTextSearch();
+  maybeSearch();
 };
 
-function runTextSearch() {
+// Function to recenter map, called from main.js
+window.recenterMap = function(lat, lng) {
+  if (!map) {
+    console.error("Map not initialized yet.");
+    return;
+  }
+
+  const newCenter = { lat: lat, lng: lng };
+  map.setCenter(newCenter);
+  map.setZoom(13);
+  maybeSearch();
+}
+
+function maybeSearch() {
+  if (!map) return;
+
+  const currentCenter = map.getCenter();
+  const currentZoom = map.getZoom();
+
+  if (currentZoom < 13) {
+    clearApartmentsList();
+    clearMarkers();
+    return;
+  }
+
+  if (shouldSearchAgain(currentCenter, currentZoom)) {
+    lastSearchCenter = currentCenter;
+    lastZoomLevel = currentZoom;
+    initialSearch(currentCenter);
+  }
+}
+
+function shouldSearchAgain(center, zoom) {
+  if (!lastSearchCenter || lastZoomLevel === null) return true;
+  if (zoom !== lastZoomLevel) return true;
+
+  const latDiff = Math.abs(center.lat() - lastSearchCenter.lat());
+  const lngDiff = Math.abs(center.lng() - lastSearchCenter.lng());
+  return (latDiff > 0.005 || lngDiff > 0.005);
+}
+
+function initialSearch(center) {
+  console.log("Searching apartments at center:", center.toString());
   clearApartmentsList();
   clearMarkers();
 
-  const bounds = map.getBounds();
-  if (!bounds) return;
-
   const request = {
-    query: 'apartment OR condo OR student housing',
-    bounds: bounds
+    location: center,
+    radius: radiusInMeters,
+    keyword: 'apartment OR condo OR student housing'
   };
 
-  // We'll collect all results across all pages
-  let allResults = [];
-
-  const callback = (results, status, pagination) => {
-    if (status === google.maps.places.PlacesServiceStatus.OK && results.length > 0) {
-      allResults = allResults.concat(results);
-      if (pagination && pagination.hasNextPage) {
-        // Fetch next page
-        pagination.nextPage();
-      } else {
-        // No more pages, now display them
-        displayFilteredApartments(allResults);
-      }
-    } else {
-      console.log("No apartments found or status:", status);
-      clearApartmentsList();
-    }
-  };
-
-  placesService.textSearch(request, callback);
+  placesService.nearbySearch(request, handleSearchResults);
 }
 
-function displayFilteredApartments(places) {
-  const mapBounds = map.getBounds();
-  const visibleResults = places.filter(place => {
-    return place.geometry && mapBounds && mapBounds.contains(place.geometry.location);
-  });
+function handleSearchResults(results, status, pag) {
+  console.log("Search results:", results, status);
+  if (status === google.maps.places.PlacesServiceStatus.OK && results.length > 0) {
+    displayApartments(results);
+    pagination = pag;
+    if (pagination && pagination.hasNextPage) {
+      setTimeout(() => pagination.nextPage(), 2000);
+    }
+  } else {
+    console.log("No apartments found in this area.");
+    clearApartmentsList();
+  }
+}
 
-  // Now we have all pages loaded and filtered by bounds, let's get details and display
-  visibleResults.forEach((place) => {
+function displayApartments(places) {
+  places.forEach((place) => {
     const detailsRequest = {
       placeId: place.place_id,
-      fields: [
-        'name', 'photos', 'vicinity', 'website', 'geometry', 'place_id'
-      ]
+      fields: ['name', 'photos', 'vicinity', 'website', 'geometry', 'place_id']
     };
 
     placesService.getDetails(detailsRequest, (details, status) => {
@@ -97,7 +131,7 @@ function displayFilteredApartments(places) {
         addApartmentMarker(details);
         addApartmentToList(details);
       } else {
-        // Fallback if getDetails fails
+        // Fallback if details request fails
         addApartmentMarker(place);
         addApartmentToList(place);
       }
@@ -134,7 +168,6 @@ function addApartmentMarker(details) {
     }
 
     contentString += `</div>`;
-
     infoWindow.setContent(contentString);
     infoWindow.open(map, marker);
   });
@@ -160,7 +193,7 @@ function addApartmentToList(details) {
   let photoUrl = '';
   if (details.photos && details.photos.length > 0) {
     photoUrl = details.photos[0].getUrl({ maxWidth: 200 });
-    photoHtml = `<img src="${photoUrl}" alt="${details.name}" />`;
+    photoHtml = `<img src="${photoUrl}" alt="${details.name}" style="max-width:100%; border-radius:5px;"/>`;
   }
 
   let websiteHtml = '';
@@ -175,10 +208,10 @@ function addApartmentToList(details) {
     ${websiteHtml}
   `;
 
-  // Only show the "Save" button if logged in
   if (window.currentUser) {
     const saveBtn = document.createElement('button');
     saveBtn.innerText = 'Save';
+    saveBtn.style.marginTop = '5px';
     saveBtn.addEventListener('click', () => {
       saveApartmentToSupabase({
         place_id: details.place_id,
@@ -193,7 +226,7 @@ function addApartmentToList(details) {
   } else {
     const loginPrompt = document.createElement('p');
     loginPrompt.style.color = 'red';
-    loginPrompt.textContent = 'Please log in to save apartments.';
+    loginPrompt.textContent = 'Log in to save apartments.';
     li.appendChild(loginPrompt);
   }
 
@@ -212,5 +245,3 @@ function clearMarkers() {
   }
   markers = [];
 }
-
-// The functions for fetching/saving/removing from Supabase and highlightStars remain the same as previously.
